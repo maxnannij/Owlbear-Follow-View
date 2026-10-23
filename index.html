@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Follow View</title>
+<style>
+  :root { color-scheme: dark; --bg:#151922; --panel:#202633; --button:#303b4d; --hover:#43536b; --accent:#8fb8ff; --danger:#e57373; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:14px; background:var(--bg); color:#f4f6fa; font:13px system-ui,-apple-system,Segoe UI,sans-serif; }
+  h1 { font-size:17px; margin:0 0 4px; text-align:center; }
+  .sub { text-align:center; color:#b6c0d0; font-size:11px; margin-bottom:12px; }
+  .card { background:var(--panel); border-radius:12px; padding:12px; margin-bottom:10px; }
+  .card h2 { font-size:12px; margin:0 0 8px; color:#b6c0d0; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  label { display:block; font-size:11px; color:#c7d0df; margin-bottom:4px; }
+  select, button.primary, button.danger {
+    width:100%; border-radius:9px; border:1px solid #4b5870; background:#11151d; color:white;
+    padding:9px 10px; font-size:13px; cursor:pointer;
+  }
+  select { margin-bottom:10px; }
+  button.primary { background:var(--button); margin-top:4px; }
+  button.primary:hover { background:var(--hover); }
+  button.danger { background:#3a2222; border-color:#6b3a3a; color:#ffcdd2; margin-top:8px; }
+  button.danger:hover { background:#4a2a2a; }
+  .row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+  .dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+  .list { list-style:none; margin:0; padding:0; }
+  .list li {
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:8px 0; border-bottom:1px solid #2a3344; font-size:12px;
+  }
+  .list li:last-child { border-bottom:none; }
+  .token-name { color:var(--accent); }
+  .muted { color:#909caf; font-size:11px; }
+  .status { margin-top:10px; padding:8px; border-radius:9px; background:var(--panel); color:#c7d0df; font-size:11px; text-align:center; min-height:28px; }
+  .hint { color:#909caf; font-size:10px; text-align:center; margin-top:10px; line-height:1.4; }
+  .gm-only { display:none; }
+  body.is-gm .gm-only { display:block; }
+  body.is-player .player-msg { display:block; }
+  .player-msg { display:none; text-align:center; padding:20px 10px; color:#b6c0d0; }
+</style>
+</head>
+<body>
+  <h1>🎯 Follow View</h1>
+  <div class="sub">Vista fijada a un personaje</div>
+
+  <div class="player-msg">
+    <p>Solo el <strong>GM</strong> asigna seguimientos.</p>
+    <p id="my-follow" class="muted">Cargando…</p>
+  </div>
+
+  <div class="gm-only">
+    <div class="card">
+      <h2>Asignar seguimiento</h2>
+      <label for="player">Jugador</label>
+      <select id="player"></select>
+      <label for="token">Personaje (seleccioná uno en el mapa o elegí de la lista)</label>
+      <select id="token"></select>
+      <button type="button" class="primary" id="assign">Fijar vista a este personaje</button>
+      <button type="button" class="danger" id="clear-one">Quitar seguimiento del jugador</button>
+    </div>
+
+    <div class="card">
+      <h2>Activos</h2>
+      <ul class="list" id="active"></ul>
+      <p class="muted" id="active-empty">Ningún seguimiento activo.</p>
+      <button type="button" class="danger" id="clear-all">Quitar todos</button>
+    </div>
+  </div>
+
+  <div class="status" id="status">Conectando…</div>
+  <div class="hint">
+    El GM elige jugador + ficha. La cámara de ese jugador se centra y sigue el token al moverse.<br>
+    Tip: seleccioná el token en el mapa antes de abrir este panel.
+  </div>
+
+<script type="module">
+import OBR from "https://esm.sh/@owlbear-rodeo/sdk@2";
+
+const META_KEY = "com.maxnanni.follow-view/state";
+const status = document.getElementById("status");
+const playerSelect = document.getElementById("player");
+const tokenSelect = document.getElementById("token");
+const activeList = document.getElementById("active");
+const activeEmpty = document.getElementById("active-empty");
+
+function playerLabel(p) {
+  const name = p.name || p.id?.slice(0, 8) || "Jugador";
+  return name;
+}
+
+async function getState() {
+  const meta = await OBR.room.getMetadata();
+  const state = meta[META_KEY];
+  if (!state || typeof state !== "object") return { assignments: {} };
+  return {
+    assignments: state.assignments && typeof state.assignments === "object"
+      ? { ...state.assignments }
+      : {},
+  };
+}
+
+async function setState(next) {
+  await OBR.room.setMetadata({
+    [META_KEY]: next,
+  });
+}
+
+async function getCharacters() {
+  const items = await OBR.scene.items.getItems(
+    (item) => item.layer === "CHARACTER"
+  );
+  return items.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+
+async function refreshPlayers() {
+  const others = await OBR.party.getPlayers();
+  // Incluir al propio usuario si es útil para pruebas; el GM suele no seguirse a sí mismo
+  const players = others.filter((p) => p.role === "PLAYER");
+  const prev = playerSelect.value;
+  playerSelect.innerHTML = "";
+  if (players.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No hay jugadores conectados";
+    playerSelect.appendChild(opt);
+  } else {
+    for (const p of players) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = playerLabel(p);
+      opt.style.color = p.color || "#fff";
+      playerSelect.appendChild(opt);
+    }
+    if (prev && [...playerSelect.options].some((o) => o.value === prev)) {
+      playerSelect.value = prev;
+    }
+  }
+  return players;
+}
+
+async function refreshTokens() {
+  const chars = await getCharacters();
+  const selection = (await OBR.player.getSelection()) || [];
+  const prev = tokenSelect.value;
+  tokenSelect.innerHTML = "";
+
+  if (chars.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No hay personajes en la escena";
+    tokenSelect.appendChild(opt);
+    return chars;
+  }
+
+  for (const c of chars) {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    const selectedMark = selection.includes(c.id) ? " ★ " : "";
+    opt.textContent = `${selectedMark}${c.name || c.id.slice(0, 8)}`;
+    tokenSelect.appendChild(opt);
+  }
+
+  // Preferir selección actual del GM
+  const selectedChar = selection.find((id) => chars.some((c) => c.id === id));
+  if (selectedChar) {
+    tokenSelect.value = selectedChar;
+  } else if (prev && chars.some((c) => c.id === prev)) {
+    tokenSelect.value = prev;
+  }
+  return chars;
+}
+
+async function refreshActive() {
+  const { assignments } = await getState();
+  const players = await OBR.party.getPlayers();
+  const byId = Object.fromEntries(players.map((p) => [p.id, p]));
+  const ids = Object.entries(assignments).filter(([, itemId]) => itemId);
+
+  activeList.innerHTML = "";
+  if (ids.length === 0) {
+    activeEmpty.style.display = "block";
+    return;
+  }
+  activeEmpty.style.display = "none";
+
+  const itemIds = ids.map(([, id]) => id);
+  const items = await OBR.scene.items.getItems(itemIds);
+  const itemById = Object.fromEntries(items.map((i) => [i.id, i]));
+
+  for (const [playerId, itemId] of ids) {
+    const li = document.createElement("li");
+    const p = byId[playerId];
+    const item = itemById[itemId];
+    const left = document.createElement("div");
+    left.className = "row";
+    left.style.margin = "0";
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = p?.color || "#888";
+    left.appendChild(dot);
+    left.appendChild(
+      document.createTextNode(p ? playerLabel(p) : playerId.slice(0, 8))
+    );
+    const right = document.createElement("span");
+    right.className = "token-name";
+    right.textContent = item?.name || itemId.slice(0, 8);
+    li.appendChild(left);
+    li.appendChild(right);
+    activeList.appendChild(li);
+  }
+}
+
+async function refreshMyFollow() {
+  const el = document.getElementById("my-follow");
+  if (!el) return;
+  const { assignments } = await getState();
+  const itemId = assignments[OBR.player.id];
+  if (!itemId) {
+    el.textContent = "No tenés la vista fijada a ningún personaje.";
+    return;
+  }
+  const items = await OBR.scene.items.getItems([itemId]);
+  el.textContent = items.length
+    ? `Tu vista sigue a: ${items[0].name || "token"}`
+    : "Tu vista está fijada, pero el token ya no está en la escena.";
+}
+
+async function refreshAll() {
+  try {
+    const role = await OBR.player.getRole();
+    document.body.classList.toggle("is-gm", role === "GM");
+    document.body.classList.toggle("is-player", role !== "GM");
+    if (role === "GM") {
+      await refreshPlayers();
+      await refreshTokens();
+      await refreshActive();
+      status.textContent = "Listo. Asigná jugador + personaje.";
+    } else {
+      await refreshMyFollow();
+      status.textContent = "Modo jugador";
+    }
+  } catch (e) {
+    console.error(e);
+    status.textContent = "Error al actualizar";
+  }
+}
+
+document.getElementById("assign").addEventListener("click", async () => {
+  const playerId = playerSelect.value;
+  const itemId = tokenSelect.value;
+  if (!playerId || !itemId) {
+    status.textContent = "Elegí jugador y personaje.";
+    return;
+  }
+  const state = await getState();
+  state.assignments[playerId] = itemId;
+  await setState(state);
+  status.textContent = "Seguimiento asignado.";
+  await refreshActive();
+});
+
+document.getElementById("clear-one").addEventListener("click", async () => {
+  const playerId = playerSelect.value;
+  if (!playerId) return;
+  const state = await getState();
+  delete state.assignments[playerId];
+  await setState(state);
+  status.textContent = "Seguimiento quitado.";
+  await refreshActive();
+});
+
+document.getElementById("clear-all").addEventListener("click", async () => {
+  await setState({ assignments: {} });
+  status.textContent = "Todos los seguimientos quitados.";
+  await refreshActive();
+});
+
+OBR.onReady(async () => {
+  await refreshAll();
+  OBR.party.onChange(() => refreshAll());
+  OBR.room.onMetadataChange(() => refreshAll());
+  OBR.player.onChange(() => refreshTokens());
+  OBR.scene.items.onChange(() => {
+    refreshTokens();
+    refreshActive();
+  });
+});
+</script>
+</body>
+</html>

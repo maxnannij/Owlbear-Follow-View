@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Follow View background</title>
+</head>
+<body>
+<script type="module">
+import OBR from "https://esm.sh/@owlbear-rodeo/sdk@2";
+
+const META_KEY = "com.maxnanni.follow-view/state";
+let followedItemId = null;
+let lastPos = null;
+let ticking = false;
+
+async function getAssignments() {
+  try {
+    const meta = await OBR.room.getMetadata();
+    const state = meta[META_KEY];
+    if (!state || typeof state !== "object") return {};
+    return state.assignments && typeof state.assignments === "object"
+      ? state.assignments
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function resolveMyFollow() {
+  const assignments = await getAssignments();
+  const myId = OBR.player.id;
+  followedItemId = assignments[myId] || null;
+  lastPos = null;
+  if (followedItemId) {
+    await centerOnItem(followedItemId, true);
+  }
+}
+
+async function centerOnItem(itemId, force) {
+  if (!itemId) return;
+  try {
+    const items = await OBR.scene.items.getItems([itemId]);
+    if (!items.length) return;
+    const item = items[0];
+    const x = item.position.x;
+    const y = item.position.y;
+    if (
+      !force &&
+      lastPos &&
+      Math.abs(lastPos.x - x) < 0.5 &&
+      Math.abs(lastPos.y - y) < 0.5
+    ) {
+      return;
+    }
+    lastPos = { x, y };
+
+    const scale = await OBR.viewport.getScale();
+    const width = await OBR.viewport.getWidth();
+    const height = await OBR.viewport.getHeight();
+    // position = esquina superior izquierda del viewport en coords de escena
+    await OBR.viewport.setPosition({
+      x: x - width / (2 * scale),
+      y: y - height / (2 * scale),
+    });
+  } catch (e) {
+    console.error("[Follow View] centerOnItem", e);
+  }
+}
+
+function scheduleCenter(itemId) {
+  if (ticking) return;
+  ticking = true;
+  requestAnimationFrame(async () => {
+    ticking = false;
+    await centerOnItem(itemId, false);
+  });
+}
+
+OBR.onReady(async () => {
+  await resolveMyFollow();
+
+  OBR.room.onMetadataChange(() => {
+    resolveMyFollow();
+  });
+
+  OBR.scene.items.onChange((items) => {
+    if (!followedItemId) return;
+    const changed = items.some((item) => item.id === followedItemId);
+    if (changed) scheduleCenter(followedItemId);
+  });
+
+  // Re-centrar si el jugador cambia el zoom (mantiene el token centrado)
+  OBR.viewport.onChange(() => {
+    if (!followedItemId) return;
+    // No reentrar en bucle: solo si el token se movió usamos items.onChange.
+    // Aquí no hacemos nada para no pelear con el pan manual del jugador.
+  });
+});
+</script>
+</body>
+</html>

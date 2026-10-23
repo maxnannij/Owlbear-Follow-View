@@ -1,0 +1,15 @@
+{
+  "name": "Follow View",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "description": "El GM fija la vista de un jugador a un personaje; la cámara sigue la ficha.",
+  "author": "Personal",
+  "background_url": "https://maxnannij.github.io/Owlbear-Follow-View/background.html",
+  "action": {
+    "title": "Follow View",
+    "icon": "https://maxnannij.github.io/Owlbear-Follow-View/icon.svg",
+    "popover": "https://maxnannij.github.io/Owlbear-Follow-View/index.html",
+    "width": 320,
+    "height": 420
+  }
+}
